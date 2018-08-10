@@ -12,16 +12,40 @@ import sys
 import time
 from serial.tools import list_ports
 import numpy as np
+from os import system
 from numpy import linalg
 import struct,sys, dcload, u6
+import argparse
 try:
     from win32com.client import Dispatch
 except:
     pass
 err = sys.stderr.write
+parser = argparse.ArgumentParser()
+parser.add_argument("-s","--skip", type=int, choices=[1, 2], help="skip parts of the test, 1=skip current meas, 2=skip current & voltage")
+parser.add_argument("-sn","--serial", type=int, help="Board serial number, if not entered user will be asked for it")
+
+parser.add_argument("-f","--file", type=string, help="File to save to, if none selected default is used")
+
+args = parser.parse_args()
+system("cls")
 PRIMARY=True
 passing=True
 
+pressure_test=None
+led_test="Null"
+measured_volts=[]
+measured_current=[]
+
+DEFAULT_EXCEL_FILE_PATH="C:\\Users\\Electrical  Test\\Dropbox (Open Water Power)\\Aluminum Research\\Design and Modeling\\Electrical\\Bench Testing\\Cell Managment Rev D Bench Test.xlsx"
+if args.file:
+    DEFAULT_EXCEL_FILE_PATH=args.file
+
+if not args.serial:
+  serial_number=input("Serial number:")
+else:
+  serial_number=args.serial
+    
 def cell_shorting(ser):
 	print("Cell Shorting: Resetting all FET's")
 	for i in range (1,16):
@@ -87,7 +111,8 @@ def calc_slope_offset(set_current,meas_current):
 def toDouble(buffer):
     right, left = struct.unpack("<Ii", struct.pack("B" * 8, *buffer[0:8]))
     return (float(left) + float(right)/(2**32))
-    
+def set_tick_hi_z(lj,number):
+    lj.i2c(0x12,[0x4f,0,0],SDAPinNum=number+1, SCLPinNum=number)
 def set_tick(lj,number,voltA,voltB):
     sclPin = number
     sdaPin = sclPin + 1
@@ -103,17 +128,36 @@ def set_tick(lj,number,voltA,voltB):
     except:
         raise Exception("Error Communicating with tick")
     
-    
-#Find serial Port of Single Board
-single_board = serial.Serial(list(list_ports.grep("0403:6001"))[0][0], 115200, timeout=.25)
+#Labjack Setup
+try:
+    lj=u6.U6()
+except:
+    print("Unable to connect to Lan Jack, try a reconnect")
+    exit(1)
+    #Turn ON Relay
 
+#SingleBoard Setup
+try:
+    single_board = serial.Serial(list(list_ports.grep("0403:6001"))[0][0], 115200, timeout=.25)
+except:
+    print("Unable to connect to Single Board, try a reconnect")
+    exit(1)
+    
 #Power Supply Setup
-#visa.log_to_screen()
-rm=visa.ResourceManager()
-pow_supply = rm.open_resource('USB0::0x0957::0xA107::US18C3185P::INSTR')
+try:
+    rm=visa.ResourceManager()
+    pow_supply = rm.open_resource('USB0::0x0957::0xA107::US18C3185P::INSTR')
+except:
+    print("Unable to connect to Keysight N5700, try a reconnect")
+    exit(1)
 pow_supply.write("OUTPut OFF\n")
 
-
+#BKLoad Setup
+try:
+    load=serial.Serial(list(list_ports.grep("067B:2303"))[0][0], 4800, timeout=.25)
+except:
+    print("Unable to connect to BKLoad, try a reconnect")
+    exit(1)
 
 #Turn off telemetry
 single_board.write(("sc+telem=0\r").encode())
@@ -123,8 +167,9 @@ single_board.read(9999)
 #Determine if primary or secondary
 single_board.write(("sc+cpressure\r").encode())
 press= float((single_board.read(9999).decode()).split(" mbar")[0])
-if press != 0:
+if press > 9000 and press<12000:
   is_primary=True
+  pressure_test="GOOD"
   print("Primary: ",is_primary)
 else:
   is_primary=False
@@ -137,68 +182,95 @@ else:
 """
 BK LOAD Current Cal
 """
-pow_supply.write("VOLTage:LEVel 7.5\n")
-pow_supply.write("CURRent:LEVel 32\n")
-pow_supply.write("OUTPut ON\n")
-#Do current sweep
-load=serial.Serial(list(list_ports.grep("067B:2303"))[0][0], 4800, timeout=.25)
-#set remote on
-load.write(bytearray([0xaa, 0, 0x20, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
-#turn on
-load.write(bytearray([0xaa, 0, 0x21, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcc]))
-#set cc mode
-load.write(bytearray([0xaa, 0, 0x28, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xd2]))
-current_steps=[0,1,5,10,20,30]
-measured_current=[]
-for i in current_steps:
-  print("Current Calibration: ",i,"A")
-  set_current(load,i)
-  time.sleep(2)
-  measured_current.append(calc_avg_current(single_board,is_primary,5))
-  if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.13)):
-    print("FAILED!! Current sense is far off from calibration, measured:",measured_current[-1]/1000," where ",i," was expected")
-    exit(1)
-  print("Current Calibration: Measured current= ",measured_current[-1],"mA")
-#turn off &remove remote
-load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
-load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
-pow_supply.write("OUTPut OFF\n")
-[current_slope,current_offset]=calc_slope_offset(current_steps,measured_current)
-print("Current Calibration: ",current_slope,"  ",current_offset)
+if args.skip == 1 or args.skip == 2: 
+    pass
+else:
+    pow_supply.write("VOLTage:LEVel 7.5\n")
+    pow_supply.write("CURRent:LEVel 32\n")
+    pow_supply.write("OUTPut ON\n")
+    #Do current sweep
+    
+    #set remote on
+    load.write(bytearray([0xaa, 0, 0x20, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
+    #turn on
+    load.write(bytearray([0xaa, 0, 0x21, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcc]))
+    #set cc mode
+    load.write(bytearray([0xaa, 0, 0x28, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xd2]))
+    current_steps=[0,1,5,10,20,30]
+    
+    for i in current_steps:
+      print("Current Calibration: ",i,"A")
+      set_current(load,i)
+      time.sleep(2)
+      measured_current.append(calc_avg_current(single_board,is_primary,5))
+      if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.13)):
+        print("FAILED!! Current sense is far off from calibration, measured:",measured_current[-1]/1000," where ",i," was expected")
+        exit(1)
+      print("Current Calibration: Measured current= ",measured_current[-1],"mA")
+    #turn off &remove remote
+    load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
+    load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
+    pow_supply.write("OUTPut OFF\n")
+    [current_slope,current_offset]=calc_slope_offset(current_steps,measured_current)
+    print("Current Calibration: ",current_slope,"  ",current_offset)
 
 ###Prompt removal of HV Connector
 input("Disconnect HV Connection")
-input("Connect Lab Jack Connection")
+
 """
 LJ Voltage Check
 """
-#Lab jack
-lj=u6.U6()
-measured_volts=[]
-#setting all Ticks to 200mV
-for i in range (0,8):
-  if i==0:
-    lj.writeRegister(5000, .2)
-  else:
-    set_tick(lj,(i-1)*2,(0.4*i),(0.4*i+.2))
-    #print((i-1)*2,(0.4*i),(0.4*i+.2))
-#TODO read back all ticks to verify they are set
-for i in range(1,16):
-  single_board.write(("sc+csense="+str(1 if is_primary else 2)+","+str(i)+"\r\n").encode())
-  val=int(single_board.read(9999).decode().split(" mV")[0])
-  measured_volts.append(val)
-  if val >210 or val <190:
-    passing=False
-    print("FAILED!!: Cell Voltage ",val," not read correctly on cell #",i)
-    exit(1)
-    
-for i in range (0,8):
-  if i==0:
-    lj.writeRegister(5000, 0)
-  else:
-    set_tick(lj,(i-1)*2,(0),(0))
-print("Measured Voltages: ",measured_volts)
-input("\nRemove Lab Jack connection and switch LED on for shorting")
+if args.skip == 2:
+    pass
+else:
+    cont=True
+    input("Connect Lab Jack Connection")
+    while cont:
+        measured_volts=[]
+        #setting all Ticks to 200mV
+        for i in range (0,8):
+          if i==0:
+            lj.writeRegister(5000, .2)
+          else:
+            set_tick(lj,(i-1)*2,(0.4*i),(0.4*i+.2))
+            #print((i-1)*2,(0.4*i),(0.4*i+.2))
+        #TODO read back all ticks to verify they are set
+        
+        for i in range(1,16):
+          tries=0
+          while (tries >4):
+              single_board.write(("sc+csense="+str(1 if is_primary else 2)+","+str(i)+"\r\n").encode())
+              val=int(single_board.read(9999).decode().split(" mV")[0])
+              if val >210 or val<190:
+                time.sleep(.25)
+                tries++
+              else:
+                measured_volts.append(val)
+                tries=5
+                break
+          
+        if max(val) >210 or min(val) <190:
+            passing=False
+            if max(val) >210:
+                offending_value = max(val)
+            else:
+                offending_value = min(val)
+            print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",val.find(offending_value)+1)
+            print(measured_volts)
+            ask=input("Try again? (y/n)")
+            if ask is "n":
+                exit(1)
+            else:
+              break    
+        for i in range (0,8):
+          if i==0:
+            lj.writeRegister(5000, 0)
+          else:
+            set_tick(lj,(i-1)*2,(0),(0))
+        print("Measured Voltages: ",measured_volts)
+        cont=False
+
+input("\nDisconnect Lab Jack connection and switch LED on for shorting")
 
 
 # DO LED shorting test
@@ -206,12 +278,18 @@ cell_shorting(single_board)
 val=input("Did LED's illuminate in order? (y/n)")
 if val == 'Y' or val == 'Y':
   pass
+  led_test="GOOD"
 else:
   passing=False
+  led_test="FAIL"
   print("FAILED!!: Cell Shorting Falied")
   exit(1)
 print("Turn off LED switch")
 print("\n\nPASS")
-
-
+ask=input("Save to file? (y/n)")
+if val == 'Y' or val == 'Y':
+    x=Excel(DEFAULT_EXCEL_FILE_PATH)
+    x.writeToFile([serial_number,measured_current,measured_volts,led_test,pressure_test],True)
+    x.saveFile()
+else:
 
