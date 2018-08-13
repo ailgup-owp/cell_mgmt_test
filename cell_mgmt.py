@@ -16,6 +16,7 @@ from os import system
 from numpy import linalg
 import struct,sys, dcload, u6
 import argparse
+from Excel import Excel
 try:
     from win32com.client import Dispatch
 except:
@@ -25,7 +26,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-s","--skip", type=int, choices=[1, 2], help="skip parts of the test, 1=skip current meas, 2=skip current & voltage")
 parser.add_argument("-sn","--serial", type=int, help="Board serial number, if not entered user will be asked for it")
 
-parser.add_argument("-f","--file", type=string, help="File to save to, if none selected default is used")
+parser.add_argument("-f","--file", type=str, help="File to save to, if none selected default is used")
 
 args = parser.parse_args()
 system("cls")
@@ -132,7 +133,7 @@ def set_tick(lj,number,voltA,voltB):
 try:
     lj=u6.U6()
 except:
-    print("Unable to connect to Lan Jack, try a reconnect")
+    print("Unable to connect to Lab Jack, try a reconnect")
     exit(1)
     #Turn ON Relay
 
@@ -165,12 +166,20 @@ single_board.write(("sc+lgcfg=5,5\r").encode())
 single_board.read(9999)
 
 #Determine if primary or secondary
-single_board.write(("sc+cpressure\r").encode())
-press= float((single_board.read(9999).decode()).split(" mbar")[0])
-if press > 9000 and press<12000:
-  is_primary=True
-  pressure_test="GOOD"
-  print("Primary: ",is_primary)
+press=[]
+for i in range(3):
+    single_board.write(("sc+cpressure\r").encode())
+    press.append(float((single_board.read(9999).decode()).split(" mbar")[0]))
+    time.sleep(1)
+
+if press[0] > 900 and press[0]<1200:
+  if press[0]==press[1] and press[1]==press[2]:
+      print ("Pressure not updating, try reconnecting single board")
+      exit(1)
+  else:
+    is_primary=True
+    pressure_test="GOOD"
+    print("Primary: ",is_primary)
 else:
   is_primary=False
   print("Primary: ",is_primary)
@@ -203,8 +212,11 @@ else:
       set_current(load,i)
       time.sleep(2)
       measured_current.append(calc_avg_current(single_board,is_primary,5))
-      if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.13)):
+      if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.15)):
         print("FAILED!! Current sense is far off from calibration, measured:",measured_current[-1]/1000," where ",i," was expected")
+        load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
+        load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
+        pow_supply.write("OUTPut OFF\n")
         exit(1)
       print("Current Calibration: Measured current= ",measured_current[-1],"mA")
     #turn off &remove remote
@@ -215,7 +227,7 @@ else:
     print("Current Calibration: ",current_slope,"  ",current_offset)
 
 ###Prompt removal of HV Connector
-input("Disconnect HV Connection")
+input("Disconnect HV Connection [ENTER]")
 
 """
 LJ Voltage Check
@@ -224,7 +236,7 @@ if args.skip == 2:
     pass
 else:
     cont=True
-    input("Connect Lab Jack Connection")
+    input("Connect Lab Jack Connection [ENTER]")
     while cont:
         measured_volts=[]
         #setting all Ticks to 200mV
@@ -237,25 +249,25 @@ else:
         #TODO read back all ticks to verify they are set
         
         for i in range(1,16):
-          tries=0
-          while (tries >4):
+            tries=0
+            while (tries <4):
               single_board.write(("sc+csense="+str(1 if is_primary else 2)+","+str(i)+"\r\n").encode())
               val=int(single_board.read(9999).decode().split(" mV")[0])
               if val >210 or val<190:
                 time.sleep(.25)
-                tries++
+                tries=tries+1
               else:
                 measured_volts.append(val)
                 tries=5
                 break
           
-        if max(val) >210 or min(val) <190:
+        if max(measured_volts) >210 or min(measured_volts) <190:
             passing=False
-            if max(val) >210:
-                offending_value = max(val)
+            if max(measured_volts) >210:
+                offending_value = max(measured_volts)
             else:
-                offending_value = min(val)
-            print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",val.find(offending_value)+1)
+                offending_value = min(measured_volts)
+            print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",measured_volts.find(offending_value)+1)
             print(measured_volts)
             ask=input("Try again? (y/n)")
             if ask is "n":
@@ -270,13 +282,13 @@ else:
         print("Measured Voltages: ",measured_volts)
         cont=False
 
-input("\nDisconnect Lab Jack connection and switch LED on for shorting")
+input("\nDisconnect Lab Jack connection and switch LED on for shorting [ENTER]")
 
 
 # DO LED shorting test
 cell_shorting(single_board)
 val=input("Did LED's illuminate in order? (y/n)")
-if val == 'Y' or val == 'Y':
+if val == 'y' or val == 'Y':
   pass
   led_test="GOOD"
 else:
@@ -287,9 +299,11 @@ else:
 print("Turn off LED switch")
 print("\n\nPASS")
 ask=input("Save to file? (y/n)")
-if val == 'Y' or val == 'Y':
+if ask == 'y' or ask == 'Y':
     x=Excel(DEFAULT_EXCEL_FILE_PATH)
-    x.writeToFile([serial_number,measured_current,measured_volts,led_test,pressure_test],True)
+    x.writeToFile([serial_number,measured_current,measured_volts,led_test,pressure_test],is_primary)
     x.saveFile()
 else:
-
+    pass
+rm.close()
+exit(1)
