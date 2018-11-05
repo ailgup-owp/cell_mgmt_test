@@ -48,29 +48,30 @@ else:
   serial_number=args.serial
     
 def cell_shorting(ser):
-	print("Cell Shorting: Resetting all FET's")
-	for i in range (1,16):
-		ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
-		ser.read(9999)
-		time.sleep(0)
-	print("Cell Shorting: Reset complete")
-	for i in range (1,16):
-		# if i>13:
-		#	input("press enter to short")
-		
-		ser.write(("sc+cellstat="+str(i)+",1\r\n").encode())
-		print("Cell Shorting: Shorting FET #",i)
-		ser.read(9999)
-		time.sleep(0)
-	time.sleep(2)
-	input("Cell Shorting: Press enter to begin reset")
-	print("Cell Shorting: Resetting all FET's")
-	for i in reversed(range (1,16)):
-		ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
-		ser.read(9999)
-		time.sleep(0)
-	
-	print("Cell Shorting: Test Complete")
+    #print("Cell Shorting: Resetting all FET's")
+    for i in range (1,16):
+        ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
+        ser.read(9999)
+        time.sleep(0)
+    #print("Cell Shorting: Reset complete")
+    input("Switch LED on for shorting [ENTER]")
+    for i in range (1,16):
+        # if i>13:
+        #   input("press enter to short")
+        
+        ser.write(("sc+cellstat="+str(i)+",1\r\n").encode())
+        print("Cell Shorting: Shorting FET #",i)
+        ser.read(9999)
+        time.sleep(0)
+    time.sleep(2)
+    input("Cell Shorting: Press enter to begin reset")
+    print("Cell Shorting: Resetting all FET's")
+    for i in reversed(range (1,16)):
+        ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
+        ser.read(9999)
+        time.sleep(0)
+    
+    print("Cell Shorting: Test Complete")
 def set_current(load,current=0):
     if current==0:
       load.write(bytearray([0xaa, 0, 0x2a, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xd4]))
@@ -132,10 +133,17 @@ def set_tick(lj,number,voltA,voltB):
 #Labjack Setup
 try:
     lj=u6.U6()
+
+    lj.i2c(0x48, [0x00], SDAPinNum=14, SCLPinNum=15)
+    lj.i2c(0x49, [0x00], SDAPinNum=14, SCLPinNum=15)
+
 except:
+    raise
     print("Unable to connect to Lab Jack, try a reconnect")
     exit(1)
-    #Turn ON Relay
+
+#Turn OFF Relay
+lj.setDIOState(16,0)
 
 #SingleBoard Setup
 try:
@@ -194,7 +202,9 @@ BK LOAD Current Cal
 if args.skip == 1 or args.skip == 2: 
     pass
 else:
-    pow_supply.write("VOLTage:LEVel 7.5\n")
+    lj.setDIOState(16,1)
+    
+    pow_supply.write("VOLTage:LEVel 5.0\n")
     pow_supply.write("CURRent:LEVel 32\n")
     pow_supply.write("OUTPut ON\n")
     #Do current sweep
@@ -212,7 +222,7 @@ else:
       set_current(load,i)
       time.sleep(2)
       measured_current.append(calc_avg_current(single_board,is_primary,5))
-      if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.15)):
+      if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.25)):
         print("FAILED!! Current sense is far off from calibration, measured:",measured_current[-1]/1000," where ",i," was expected")
         load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
         load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
@@ -221,13 +231,14 @@ else:
       print("Current Calibration: Measured current= ",measured_current[-1],"mA")
     #turn off &remove remote
     load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
+    time.sleep(.5)
     load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
     pow_supply.write("OUTPut OFF\n")
     [current_slope,current_offset]=calc_slope_offset(current_steps,measured_current)
     print("Current Calibration: ",current_slope,"  ",current_offset)
-
+    lj.setDIOState(16,0)
 ###Prompt removal of HV Connector
-input("Disconnect HV Connection [ENTER]")
+
 
 """
 LJ Voltage Check
@@ -236,7 +247,8 @@ if args.skip == 2:
     pass
 else:
     cont=True
-    input("Connect Lab Jack Connection [ENTER]")
+    lj.i2c(0x48, [0xFF], SDAPinNum=14, SCLPinNum=15)
+    lj.i2c(0x49, [0xFF], SDAPinNum=14, SCLPinNum=15)
     while cont:
         measured_volts=[]
         #setting all Ticks to 200mV
@@ -256,6 +268,8 @@ else:
               if val >210 or val<190:
                 time.sleep(.25)
                 tries=tries+1
+                if tries==4:
+                    measured_volts.append(val)
               else:
                 measured_volts.append(val)
                 tries=5
@@ -267,22 +281,17 @@ else:
                 offending_value = max(measured_volts)
             else:
                 offending_value = min(measured_volts)
-            print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",measured_volts.find(offending_value)+1)
+            print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",measured_volts.index(offending_value)+1)
             print(measured_volts)
             ask=input("Try again? (y/n)")
             if ask is "n":
-                exit(1)
-            else:
-              break    
-        for i in range (0,8):
-          if i==0:
-            lj.writeRegister(5000, 0)
-          else:
-            set_tick(lj,(i-1)*2,(0),(0))
-        print("Measured Voltages: ",measured_volts)
-        cont=False
+                break            
+        else:
+            print("Measured Voltages: ",measured_volts)
+            cont=False
+    lj.i2c(0x48, [0x00], SDAPinNum=14, SCLPinNum=15)
+    lj.i2c(0x49, [0x00], SDAPinNum=14, SCLPinNum=15)
 
-input("\nDisconnect Lab Jack connection and switch LED on for shorting [ENTER]")
 
 
 # DO LED shorting test
@@ -305,5 +314,5 @@ if ask == 'y' or ask == 'Y':
     x.saveFile()
 else:
     pass
-rm.close()
+pow_supply.close()
 exit(1)
