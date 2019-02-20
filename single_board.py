@@ -118,9 +118,9 @@ class Tests:
         
         self.output_3a_spot_check = Var("3A Spot Check",max=3.2,min=2.8,type='float')
         
-        self.boost_regulation_2a=Var("Input Voltage Regulation, 2A",max=[6.5,7,2.2,32,7.1,6.6],min=[6,6.5,1.8,15,6.9,5.5],type='list')
-        self.boost_regulation_3a=Var("Input Voltage Regulation, 3A",max=[6.7,7,3.2,32,7.1,6.8],min=[6.1,6.5,2.8,7,6.9,5.5],type='list')
-        self.boost_regulation_4a=Var("Input Voltage Regulation, 4A",max=[6.9,7,4.3,15,7.1,7],min=[6.2,6.5,3.8,7,6.9,5.5],type='list')
+        self.boost_regulation_2a=Var("Input Voltage Regulation, 2A",max=[10,7,2.2,32,7.1,8.5],min=[6,6.5,1.8,15,6.9,5.5],type='list')
+        self.boost_regulation_3a=Var("Input Voltage Regulation, 3A",max=[10,7,3.2,32,7.1,8.5],min=[6.1,6.5,2.8,7,6.9,5.5],type='list')
+        self.boost_regulation_4a=Var("Input Voltage Regulation, 4A",max=[610,7,4.3,15,7.1,8.5],min=[6.2,6.5,3.8,7,6.9,5.5],type='list')
         
         self.reg_12v=Var("12V Rail",max=12.2,min=11.8,type='float')
         self.reg_6v=Var("6V Rail",max=6.1,min=5.88,type='float')
@@ -287,7 +287,9 @@ def getVal(target,command,start="",end=""):
 def getVal(target,command,split_str="",split_num=0):
     target.write((command).encode())
     time.sleep(1)
-    return target.read(9999).decode().split(split_str)[split_num]
+    raw=target.read(9999).decode()
+    #print("[RAW}:",raw)
+    return raw.split(split_str)[split_num]
 
 def power_supply_get(supply,item="VOLT"):
     supply.write("MEAS:"+item+"?")
@@ -325,7 +327,7 @@ def meter_and_telem(target,meter,position,samples=1):
     return [meter_total/samples,telem_total/samples]
 #SingleBoard Setup
 try:
-    single_board = serial.Serial(list(list_ports.grep("04E2:1422"))[0][0], 115200, timeout=.25)
+    single_board = serial.Serial(list(list_ports.grep("Ch A"))[0][0], 115200, timeout=.25)
 except:
     print("Unable to connect to Single Board, try a reconnect")
     exit(1)
@@ -349,7 +351,8 @@ except:
         current_meter=U1282A(port=(list(list_ports.grep("067B:2303"))[pos+1][0]))
         pos=0
     except:
-        raise Exception("Cannot find current meter/BKLoad")
+        print("Cannot find current meter/BKLoad, make sure meter is powered on")
+        exit()
 #BKLoad Setup
 try:
     load=serial.Serial(list(list_ports.grep("067B:2303"))[pos][0], 4800, timeout=.25)
@@ -385,17 +388,17 @@ if not args.serial:
 else:
   t.sn.setValue(args.serial)
 #UID
-t.uid.setValue(getVal(single_board,"sc+uid\r","OK",0))
+t.uid.setValue(getVal(single_board,"sc+uid\r\n","OK",0))
 
 #32V output Testing
 #reset to default config
 single_board.write(("sc+pcfg=1,0,1,0,1,0\r\n").encode())
-
+single_board.write(("sc+bcellthresh=200\r\n").encode())
 input("    Ensure U1282A is connected to Voltage input [ENTER} >>")
 single_board.write("sc+regstate=0,0\r\nsc+regstate=1,0\r\nsc+regstate=2,0\r\nsc+regstate=3,0\r\nsc+regstate=4,0\r\n".encode())
 
 pow_supply.write("VOLTage:LEVel 15.0\n")
-pow_supply.write("CURRent:LEVel 30\n")
+pow_supply.write("CURRent:LEVel 40\n")
 time.sleep(0.1)
 pow_supply.write("OUTPut ON\n")
 
@@ -535,19 +538,7 @@ t.droop_5v5.setValue(getTelemValues(single_board,10)/1000)
 pow_supply.write("VOLTage:LEVel 7.5\n")
 
 
-single_board.write("sc+mpvel=2000\r\n".encode())
-pump_passing=(input("Pump Spinning CCW & up to speed?  Enter=YES>>")=="")
 
-pump_passing=(abs(2000+getTelemValues(single_board,116,3))<300) and pump_passing
-
-single_board.write("sc+mpvel=0\r\n".encode())
-pump_passing=(input("Pump Stopped? Enter=YES>>")=="") and pump_passing
-
-single_board.write("sc+mpvel=-2000\r\n".encode())
-pump_passing=(input("Pump Spinning CWEnter=YES>>")=="") and pump_passing
-
-
-t.pump.setValue(pump_passing)
 
 #set open loop
 single_board.write("sc+mimode=0\r\n".encode())
@@ -569,6 +560,26 @@ for m in motors:
     motor_passing=(input("Motor Stopped? Enter=YES>>")=="") and motor_passing
     m.setValue(motor_passing)
 
+    
+#pump
+single_board.write("sc+mpvel=2000\r\n".encode())
+pump_passing=(input("Pump Spinning CCW & up to speed?  Enter=YES>>")=="")
+#print(pump_passing)
+pump_math=abs(2000-getTelemValues(single_board,116,1))
+#print("MATH:",pump_math)
+pump_passing=pump_math<300 and pump_passing
+#print(pump_passing)
+single_board.write("sc+mpenable=0\r\n".encode())
+pump_passing=(input("Pump Stopped? Enter=YES>>")=="") and pump_passing
+#print(pump_passing)
+single_board.write("sc+mpenable=1\r\nsc+mpvel=-2000\r\n".encode())
+pump_passing=(input("Pump Spinning CWEnter=YES>>")=="") and pump_passing
+#print(pump_passing)
+
+t.pump.setValue(pump_passing)
+    
+    
+#pressure sensors
 single_board.write("sc+pscfg=1,0,1,0\r\n".encode())
 psensors=[t.pump_pressure,t.waste_pressure]
 vals=[138,139]
@@ -610,7 +621,7 @@ for l in lc:
     input("    Excite load cell sensor>>")
     post=getTelemValues(single_board,vals[lc.index(l)],3)
     print("Pre=",pre," Post=",post)
-    l.setValue(post>=pre)
+    l.setValue(post<=pre)
     
 #not actually checking this
 t.accel.setValue(1)
@@ -628,5 +639,7 @@ if ask == 'y' or ask == 'Y':
     x.saveFile()
 else:
     pass
+single_board.write(("sc+telem=1\r").encode())
+single_board.write(("sc+lgcfg=1,1\r").encode())
 pow_supply.close()
 exit(1)

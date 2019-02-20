@@ -1,6 +1,7 @@
 from openpyxl import *
 import datetime
 import time
+import os
 class Excel:
 
   def __init__(self,file):
@@ -28,9 +29,9 @@ class Excel:
           raise Exception("Invalid Excell document, must include the 'Blank' worksheet to duplicate")
         target.title = sheet_name
     if primary:
-        cell_positions={"sn":"b2","datetime":"c2","current_col":2,"voltage_col":2,"led_shorting":"C17","pressure_sensor":"D22"}
+        cell_positions={"sn":"b2","datetime":"c2","pc":"d2","current_col":2,"voltage_col":2,"led_shorting":"C17","pressure_sensor":"D22"}
     else:
-        cell_positions={"sn":"b3","datetime":"c3","current_col":4,"voltage_col":3,"led_shorting":"C18","pressure_sensor":None}
+        cell_positions={"sn":"b3","datetime":"c3","pc":"d3","current_col":4,"voltage_col":3,"led_shorting":"C18","pressure_sensor":None}
     #check if we already have values written
     if target[cell_positions["sn"]].value:
         print("This board already appears to have been tested")
@@ -46,6 +47,8 @@ class Excel:
     target[cell_positions["sn"]]=sn
     #Write Test datetime
     target[cell_positions["datetime"]]=str(datetime.datetime.now())
+    #Write PC Name
+    target[cell_positions["pc"]]=os.environ['COMPUTERNAME']
     #write current stuff
     r = 8
     for n in current_meas:

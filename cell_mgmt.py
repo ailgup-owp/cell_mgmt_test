@@ -6,11 +6,16 @@ C. Puglia
 
 ex. python3 cell_mgmt.py
 """
+#this is up here because it takes too long for dependencies to be imported and this is the one user required part for some time
+serial_number=input("Serial number:")
+
+
 import serial
 import visa
 import sys
 import time
 from serial.tools import list_ports
+from BKLoad import BKLoad
 import numpy as np
 from os import system
 from numpy import linalg
@@ -21,41 +26,62 @@ try:
     from win32com.client import Dispatch
 except:
     pass
+    
+    
+    
+TWELVE_CELL_REVS = ["F","H"]
+FIFTEEN_CELL_REVS = ["I"]
+DEFAULT_FILE_NAME = "C:\\Users\\Electrical  Test\\Dropbox (Open Water Power)\\Aluminum Research\\Design and Modeling\\Electrical\\Bench Testing\\Cell Managment Rev %s Bench Test.xlsx"
+
+
+""" ARGUMENT SECTION """
 err = sys.stderr.write
 parser = argparse.ArgumentParser()
 parser.add_argument("-s","--skip", type=int, choices=[1, 2], help="skip parts of the test, 1=skip current meas, 2=skip current & voltage")
 parser.add_argument("-sn","--serial", type=int, help="Board serial number, if not entered user will be asked for it")
-
 parser.add_argument("-f","--file", type=str, help="File to save to, if none selected default is used")
 
 args = parser.parse_args()
+
+
 system("cls")
+
+""" TEST VARIABLES """
 PRIMARY=True
 passing=True
-
 pressure_test=None
 led_test="Null"
+stack_voltage=-1
 measured_volts=[]
 measured_current=[]
+filename=None
+try:
+  filename = DEFAULT_FILE_NAME % args.rev[0].upper()
+  x=open(filename)
+  x.close()  
+except:
+  raise Exception("Cannot find file to write to, ensure revision correct")
 
-DEFAULT_EXCEL_FILE_PATH="C:\\Users\\Electrical  Test\\Dropbox (Open Water Power)\\Aluminum Research\\Design and Modeling\\Electrical\\Bench Testing\\Cell Managment Rev D Bench Test.xlsx"
-if args.file:
-    DEFAULT_EXCEL_FILE_PATH=args.file
-
-if not args.serial:
-  serial_number=input("Serial number:")
-else:
+if args.serial:
   serial_number=args.serial
-    
+
+def number_of_cells():
+    if args.rev[0].upper() in TWELVE_CELL_REVS:
+      return 12
+    elif args.rev[0].upper() in FIFTEEN_CELL_REVS:
+      return 15
+    else:
+      raise Exception("This program is not designed for this revision %s of the Cell Mgmt board" % args.rev[0].upper())
 def cell_shorting(ser):
     #print("Cell Shorting: Resetting all FET's")
-    for i in range (1,16):
+    numCells=number_of_cells()
+    for i in range (1,numCells+1):
         ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
         ser.read(9999)
         time.sleep(0)
     #print("Cell Shorting: Reset complete")
     input("Switch LED on for shorting [ENTER]")
-    for i in range (1,16):
+    for i in range (1,numCells+1):
         # if i>13:
         #   input("press enter to short")
         
@@ -64,29 +90,15 @@ def cell_shorting(ser):
         ser.read(9999)
         time.sleep(0)
     time.sleep(2)
-    input("Cell Shorting: Press enter to begin reset")
+    input("Cell Shorting: Press [ENTER] to begin reset")
     print("Cell Shorting: Resetting all FET's")
-    for i in reversed(range (1,16)):
+    for i in reversed(range (1,numCells+1)):
         ser.write(("sc+cellstat="+str(i)+",0\r\n").encode())
         ser.read(9999)
         time.sleep(0)
     
     print("Cell Shorting: Test Complete")
-def set_current(load,current=0):
-    if current==0:
-      load.write(bytearray([0xaa, 0, 0x2a, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xd4]))
-    elif current==1:
-      load.write(bytearray([0xaa, 0, 0x2a, 0x10,0x27,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xb]))
-    elif current==5:
-      load.write(bytearray([0xaa, 0, 0x2a, 0x50,0xC3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xE7]))
-    elif current==10:
-      load.write(bytearray([0xaa, 0, 0x2a, 0xA0,0x86,0x01,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xfb]))
-    elif current==20:
-      load.write(bytearray([0xaa, 0, 0x2a, 0x40,0x0D,0x03,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x24]))
-    elif current==30:
-      load.write(bytearray([0xaa, 0, 0x2a, 0xE0,0x93,0x04,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x4b]))
-    else:
-      raise Exception("Invalid current")
+
 def calc_avg_current(board,primary,counts=10):
     avg=[]
     for i in range(counts):
@@ -162,11 +174,7 @@ except:
 pow_supply.write("OUTPut OFF\n")
 
 #BKLoad Setup
-try:
-    load=serial.Serial(list(list_ports.grep("067B:2303"))[0][0], 4800, timeout=.25)
-except:
-    print("Unable to connect to BKLoad, try a reconnect")
-    exit(1)
+load=BKLoad()
 
 #Turn off telemetry
 single_board.write(("sc+telem=0\r").encode())
@@ -210,29 +218,28 @@ else:
     #Do current sweep
     
     #set remote on
-    load.write(bytearray([0xaa, 0, 0x20, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
+    load.remote()
     #turn on
-    load.write(bytearray([0xaa, 0, 0x21, 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcc]))
+    load.on()
     #set cc mode
-    load.write(bytearray([0xaa, 0, 0x28, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xd2]))
+    load.setCC()
     current_steps=[0,1,5,10,20,30]
     
     for i in current_steps:
       print("Current Calibration: ",i,"A")
-      set_current(load,i)
+      load.set_current(i)
       time.sleep(2)
       measured_current.append(calc_avg_current(single_board,is_primary,5))
       if (i>1 and (abs((measured_current[-1]-(1000*i))/(1000*i))>.25)):
         print("FAILED!! Current sense is far off from calibration, measured:",measured_current[-1]/1000," where ",i," was expected")
-        load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
-        load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
+        load.off()
+        load.remote_off()
         pow_supply.write("OUTPut OFF\n")
         exit(1)
       print("Current Calibration: Measured current= ",measured_current[-1],"mA")
     #turn off &remove remote
-    load.write(bytearray([0xaa, 0, 0x21, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xcb]))
-    time.sleep(.5)
-    load.write(bytearray([0xaa, 0, 0x20, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xca]))
+    load.off()
+    load.remote_off()
     pow_supply.write("OUTPut OFF\n")
     [current_slope,current_offset]=calc_slope_offset(current_steps,measured_current)
     print("Current Calibration: ",current_slope,"  ",current_offset)
@@ -243,6 +250,9 @@ else:
 """
 LJ Voltage Check
 """
+CELL_VOLTAGE = .2 #Volts
+ACCEPTABLE_ERROR = .05 #%/100
+NUMBER_OF_CELLS = number_of_cells()
 if args.skip == 2:
     pass
 else:
@@ -254,18 +264,20 @@ else:
         #setting all Ticks to 200mV
         for i in range (0,8):
           if i==0:
-            lj.writeRegister(5000, .2)
+            lj.writeRegister(5000, CELL_VOLTAGE)
           else:
             set_tick(lj,(i-1)*2,(0.4*i),(0.4*i+.2))
             #print((i-1)*2,(0.4*i),(0.4*i+.2))
-        #TODO read back all ticks to verify they are set
-        
-        for i in range(1,16):
+        #Loops through all ADC chanels and looks "tries" number of times to see if the correct value is set one of those times
+        #If none of those times are valid it writes the invalid value and keeps going
+        # This is done to allow for easier debug if multiple channels are dead you see that
+        for i in range(1,NUMBER_OF_CELLS+1):
             tries=0
             while (tries <4):
               single_board.write(("sc+csense="+str(1 if is_primary else 2)+","+str(i)+"\r\n").encode())
               val=int(single_board.read(9999).decode().split(" mV")[0])
-              if val >210 or val<190:
+              #If voltage is invalid
+              if CELL_VOLTAGE*(1+ACCEPTABLE_ERROR) < val < CELL_VOLTAGE*(1-ACCEPTABLE_ERROR):
                 time.sleep(.25)
                 tries=tries+1
                 if tries==4:
@@ -274,17 +286,35 @@ else:
                 measured_volts.append(val)
                 tries=5
                 break
-          
-        if max(measured_volts) >210 or min(measured_volts) <190:
+        #stack voltage
+        single_board.write(("sc+cvstack="++","+str(i)+"\r\n").encode())
+        val=int(single_board.read(9999).decode().split(str('b1: ' if is_primary else 'b2: '))[1].split(" mV")[0])
+        if  NUMBER_OF_CELLS*CELL_VOLTAGE*(1-ACCEPTABLE_ERROR) < val < NUMBER_OF_CELLS*CELL_VOLTAGE*(1+ACCEPTABLE_ERROR):
+            stack_voltage=val
+        else:
+            print("FAILED!!: Stack Voltage ",stack_voltage," not read correctly ")
+            print(measured_volts)
+            ask=input("Try again? [ENTER=yes]")
+            if ask is "":
+                pass
+            else:
+                passing=False
+                break
+        
+        #checking the individual cell voltages
+        if max(measured_volts) > CELL_VOLTAGE*(1+ACCEPTABLE_ERROR) or min(measured_volts) < CELL_VOLTAGE*(1-ACCEPTABLE_ERROR):
             passing=False
-            if max(measured_volts) >210:
+            if max(measured_volts) >CELL_VOLTAGE*(1+ACCEPTABLE_ERROR):
                 offending_value = max(measured_volts)
             else:
                 offending_value = min(measured_volts)
             print("FAILED!!: Cell Voltage ",offending_value," not read correctly on cell #",measured_volts.index(offending_value)+1)
             print(measured_volts)
-            ask=input("Try again? (y/n)")
-            if ask is "n":
+            ask=input("Try again? [ENTER=yes]")
+            if ask is "":
+                pass
+            else:
+                passing=False
                 break            
         else:
             print("Measured Voltages: ",measured_volts)
@@ -296,8 +326,8 @@ else:
 
 # DO LED shorting test
 cell_shorting(single_board)
-val=input("Did LED's illuminate in order? (y/n)")
-if val == 'y' or val == 'Y':
+val=input("Did LED's illuminate in order? [ENTER=yes]")
+if val == '':
   pass
   led_test="GOOD"
 else:
@@ -306,11 +336,11 @@ else:
   print("FAILED!!: Cell Shorting Falied")
   exit(1)
 print("Turn off LED switch")
-print("\n\nPASS")
-ask=input("Save to file? (y/n)")
-if ask == 'y' or ask == 'Y':
-    x=Excel(DEFAULT_EXCEL_FILE_PATH)
-    x.writeToFile([serial_number,measured_current,measured_volts,led_test,pressure_test],is_primary)
+print("\nPASS")
+ask=input("Save to file? [ENTER=yes]")
+if ask == '':
+    x=Excel(filename)
+    x.writeToFile([serial_number,measured_current,measured_volts.append(stack_voltage),led_test,pressure_test],is_primary)
     x.saveFile()
 else:
     pass
