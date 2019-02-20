@@ -1,13 +1,12 @@
 """
 Cell Managment Board Test Script
 
-8/7/2018
+2/20/19
 C. Puglia
 
-ex. python3 cell_mgmt.py
+ex. python3 cell_mgmt.py -r H
 """
-#this is up here because it takes too long for dependencies to be imported and this is the one user required part for some time
-serial_number=input("Serial number:")
+
 
 
 import serial
@@ -28,10 +27,21 @@ except:
     pass
     
     
-    
+"""
+This piece will need to be updated when a new Rev is released
+"""    
 TWELVE_CELL_REVS = ["F","H"]
 FIFTEEN_CELL_REVS = ["I"]
 DEFAULT_FILE_NAME = "C:\\Users\\Electrical  Test\\Dropbox (Open Water Power)\\Aluminum Research\\Design and Modeling\\Electrical\\Bench Testing\\Cell Managment Rev %s Bench Test.xlsx"
+
+
+##############################################################
+##############################################################
+#####                                                    #####
+#####               EDIT BELOW AT OWN RISK               #####
+#####                                                    #####
+##############################################################
+##############################################################
 
 
 """ ARGUMENT SECTION """
@@ -40,9 +50,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-s","--skip", type=int, choices=[1, 2], help="skip parts of the test, 1=skip current meas, 2=skip current & voltage")
 parser.add_argument("-sn","--serial", type=int, help="Board serial number, if not entered user will be asked for it")
 parser.add_argument("-f","--file", type=str, help="File to save to, if none selected default is used")
+parser.add_argument("-r","--rev", type=str, help="[REQUIRED] revision letter of PCB", required=True)
 
 args = parser.parse_args()
 
+serial_number=None
 
 system("cls")
 
@@ -175,6 +187,11 @@ pow_supply.write("OUTPut OFF\n")
 
 #BKLoad Setup
 load=BKLoad()
+
+
+#All HW good ready to test
+serial_number=input("Serial number:")
+
 
 #Turn off telemetry
 single_board.write(("sc+telem=0\r").encode())
